@@ -129,21 +129,21 @@ const QuizPage: React.FC = () => {
             magicPower: progress.magicPower + result.earnedMagicPower,
           });
         }
+      }
 
-        // 如果通过，解锁下一个节点
-        if (result.score >= 60) {
-          // 标记当前故事为完成
-          const currentNode = await db.mapNodes.where('storyId').equals(storyId).first();
-          if (currentNode) {
-            await db.mapNodes.update(currentNode.id, { completed: true });
-            
-            // 解锁下一个节点
-            const nextNode = await db.mapNodes
-              .filter(n => n.prerequisites?.includes(currentNode.id) && !n.unlocked)
-              .first();
-            if (nextNode) {
-              await db.mapNodes.update(nextNode.id, { unlocked: true });
-            }
+      // 如果通过，解锁下一个节点（全局状态，不需要 userId）
+      if (result.score >= 60 && storyId) {
+        // 标记当前故事为完成
+        const currentNode = await db.mapNodes.where('storyId').equals(storyId).first();
+        if (currentNode) {
+          await db.mapNodes.update(currentNode.id, { completed: true });
+          
+          // 解锁下一个节点
+          const nextNode = await db.mapNodes
+            .filter(n => n.prerequisites?.includes(currentNode.id) && !n.unlocked)
+            .first();
+          if (nextNode) {
+            await db.mapNodes.update(nextNode.id, { unlocked: true });
           }
         }
       }
