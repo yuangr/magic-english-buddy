@@ -185,7 +185,7 @@ const ReaderPage: React.FC = () => {
   }, []);
 
   // 段落点击 - 朗读当前段落
-  const handleParagraphClick = useCallback(async (paragraphIndex: number, text: string) => {
+  const handleParagraphClick = useCallback(async (_paragraphIndex: number, text: string) => {
     try {
       // 停止当前播放
       ttsService.stop();
