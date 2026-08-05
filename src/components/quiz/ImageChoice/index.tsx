@@ -70,7 +70,8 @@ export const ImageChoice: React.FC<ImageChoiceProps> = ({
       {/* 题目区域 */}
       <div className={styles.questionSection}>
         <h2 className={styles.title}>🎧 听一听，选一选</h2>
-        <p className={styles.instruction}>点击喇叭听单词，选择对应的图片</p>
+        <p className={styles.instruction}>点击喇叭听语音，选择正确的图片</p>
+        <h3 className={styles.questionText}>{question.question}</h3>
         
         <motion.button
           className={`${styles.playBtn} ${isPlaying ? styles.playing : ''}`}
@@ -99,8 +100,9 @@ export const ImageChoice: React.FC<ImageChoiceProps> = ({
             whileTap={{ scale: 0.98 }}
           >
             {option.image ? (
-              <div className={styles.optionImage}>
+              <div className={styles.optionContent}>
                 <span className={styles.emoji}>{option.image}</span>
+                {option.text && <span className={styles.optionLabel}>{option.text}</span>}
               </div>
             ) : (
               <div className={styles.optionText}>
