@@ -39,6 +39,8 @@ interface StoryContentProps {
   onWordClick?: (word: string, globalIndex: number, paragraphIndex: number) => void;
   /** 单词长按回调 */
   onWordLongPress?: (word: string, globalIndex: number, paragraphIndex: number) => void;
+  /** 段落点击回调 */
+  onParagraphClick?: (paragraphIndex: number, text: string) => void;
 }
 
 export const StoryContent = memo<StoryContentProps>(({
@@ -49,6 +51,7 @@ export const StoryContent = memo<StoryContentProps>(({
   learnedWords = new Set(),
   onWordClick,
   onWordLongPress,
+  onParagraphClick,
 }) => {
   // 计算全局单词索引
   const getGlobalWordIndex = useCallback((paragraphIndex: number, localWordIndex: number) => {
@@ -85,6 +88,11 @@ export const StoryContent = memo<StoryContentProps>(({
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: paragraphIndex * 0.1 }}
+            onClick={(e) => {
+              // Ensure we don't trigger this if clicking on a specific word component
+              // (WordHighlight handles its own clicks, but we can also check target)
+              onParagraphClick?.(paragraphIndex, paragraph.text);
+            }}
           >
             {/* 英文段落 */}
             <p className={styles.englishText}>

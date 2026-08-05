@@ -24,7 +24,7 @@ export const ImageChoice: React.FC<ImageChoiceProps> = ({
 
   // 播放音频
   const playAudio = useCallback(() => {
-    if (question.audioQuestion && typeof window !== 'undefined' && window.speechSynthesis) {
+    if (question.question && typeof window !== 'undefined' && window.speechSynthesis) {
       setIsPlaying(true);
       // 使用 Web Speech API 播放音频
       const utterance = new SpeechSynthesisUtterance(question.question);

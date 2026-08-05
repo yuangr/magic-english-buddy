@@ -184,6 +184,18 @@ const ReaderPage: React.FC = () => {
     readingProgressService.addLearnedWord(word);
   }, []);
 
+  // 段落点击 - 朗读当前段落
+  const handleParagraphClick = useCallback(async (paragraphIndex: number, text: string) => {
+    try {
+      // 停止当前播放
+      ttsService.stop();
+      ttsService.setRate(speed);
+      await ttsService.speak(text);
+    } catch (error) {
+      console.error('Paragraph TTS failed:', error);
+    }
+  }, [speed]);
+
   // 关闭字典
   const handleCloseDictionary = useCallback(() => {
     setShowDictionary(false);
@@ -275,6 +287,7 @@ const ReaderPage: React.FC = () => {
           learnedWords={learnedWords}
           onWordClick={handleWordClick}
           onWordLongPress={handleWordLongPress}
+          onParagraphClick={handleParagraphClick}
         />
       </main>
 

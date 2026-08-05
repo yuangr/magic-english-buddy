@@ -32,7 +32,8 @@ export const WordHighlight = memo<WordHighlightProps>(({
   onLongPress,
 }) => {
   // 处理点击
-  const handleClick = useCallback(() => {
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
     onClick?.(word, index);
   }, [word, index, onClick]);
 
