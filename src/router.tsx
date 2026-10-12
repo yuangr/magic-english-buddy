@@ -5,6 +5,8 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
 import { Loading } from '@/components/common/Loading';
+import { LessonGuard } from '@/components/common/LessonGuard';
+import { RouteError } from '@/components/common/RouteError';
 
 // 懒加载页面组件
 const OnboardingPage = lazy(() => import('@/pages/OnboardingPage'));
@@ -13,6 +15,8 @@ const ReaderPage = lazy(() => import('@/pages/ReaderPage'));
 const QuizPage = lazy(() => import('@/pages/QuizPage'));
 const ScrollPage = lazy(() => import('@/pages/ScrollPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
+const ReviewPage = lazy(() => import('@/pages/ReviewPage'));
+const CertificatePage = lazy(() => import('@/pages/CertificatePage'));
 
 // 加载组件包装器
 const PageLoader = ({ children }: { children: React.ReactNode }) => (
@@ -27,7 +31,7 @@ const PageLoader = ({ children }: { children: React.ReactNode }) => (
 
 // 路由配置
 export const router = createBrowserRouter(
-  [
+  [{ errorElement: <RouteError />, children: [
     {
       path: '/',
       element: <Navigate to="/onboarding" replace />,
@@ -52,7 +56,7 @@ export const router = createBrowserRouter(
       path: '/reader/:storyId',
       element: (
         <PageLoader>
-          <ReaderPage />
+          <LessonGuard><ReaderPage /></LessonGuard>
         </PageLoader>
       ),
     },
@@ -60,7 +64,7 @@ export const router = createBrowserRouter(
       path: '/quiz/:storyId',
       element: (
         <PageLoader>
-          <QuizPage />
+          <LessonGuard><QuizPage /></LessonGuard>
         </PageLoader>
       ),
     },
@@ -80,15 +84,16 @@ export const router = createBrowserRouter(
         </PageLoader>
       ),
     },
+    { path: '/review', element: <PageLoader><ReviewPage /></PageLoader> },
+    { path: '/certificate', element: <PageLoader><CertificatePage /></PageLoader> },
     {
       path: '*',
       element: <Navigate to="/onboarding" replace />,
     },
-  ],
+  ] }],
   {
     basename: '/magic-english-buddy',
   }
 );
 
 export default router;
-

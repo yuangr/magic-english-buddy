@@ -2,166 +2,156 @@
  * QuizPage 练习页面
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { db, type QuizItem } from '@/db';
+import type { QuizItem } from '@/db';
 import { QuizContainer, type QuizResultData } from '@/components/quiz';
+import { completeStoryQuiz, getLessonAccess } from '@/services/learningCompletionService';
+import {
+  loadQuizDraft,
+  saveQuizDraft,
+  type LoadedQuizDraft,
+  type QuizDraftSnapshot,
+} from '@/services/quizDraftService';
+import { getLearningRevision } from '@/services/learningRevisionService';
+import { Modal } from '@/components/common/Modal';
 import { Loading } from '@/components/common';
 import { useAppStore } from '@/stores/useAppStore';
 import styles from './QuizPage.module.css';
 
-// 示例题目数据
-const sampleQuestions: QuizItem[] = [
-  {
-    id: 'q1',
-    type: 'image_choice',
-    question: 'apple',
-    audioQuestion: '🍎',
-    options: [
-      { image: '🍎', value: 'apple' },
-      { image: '🍌', value: 'banana' },
-      { image: '🍊', value: 'orange' },
-      { image: '🍇', value: 'grape' },
-    ],
-    correctAnswer: 'apple',
-  },
-  {
-    id: 'q2',
-    type: 'word_builder',
-    question: '拼出这个单词',
-    audioQuestion: '🐱',
-    shuffledWords: ['c', 'a', 't'],
-    correctAnswer: 'cat',
-  },
-  {
-    id: 'q3',
-    type: 'image_choice',
-    question: 'dog',
-    audioQuestion: '🐶',
-    options: [
-      { image: '🐱', value: 'cat' },
-      { image: '🐶', value: 'dog' },
-      { image: '🐰', value: 'rabbit' },
-      { image: '🐸', value: 'frog' },
-    ],
-    correctAnswer: 'dog',
-  },
-  {
-    id: 'q4',
-    type: 'sentence_order',
-    question: '排列成正确的句子',
-    shuffledWords: ['is', 'This', 'apple', 'an'],
-    correctOrder: ['This', 'is', 'an', 'apple'],
-    correctAnswer: 'This is an apple',
-  },
-  {
-    id: 'q5',
-    type: 'word_builder',
-    question: '拼出这个单词',
-    audioQuestion: '🌙',
-    shuffledWords: ['m', 'o', 'o', 'n'],
-    correctAnswer: 'moon',
-  },
-];
-
 const QuizPage: React.FC = () => {
   const navigate = useNavigate();
   const { storyId } = useParams<{ storyId: string }>();
-  const currentUserId = useAppStore((state) => state.currentUserId);
+  const currentUserId = useAppStore(state => state.currentUserId);
 
   const [loading, setLoading] = useState(true);
   const [questions, setQuestions] = useState<QuizItem[]>([]);
+  const [isReview, setIsReview] = useState(false);
+  const [storyRewardMagicPower, setStoryRewardMagicPower] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [exitConfirmationOpen, setExitConfirmationOpen] = useState(false);
+  const [initialDraft, setInitialDraft] = useState<LoadedQuizDraft | null>(null);
+  const [attemptStartedAt, setAttemptStartedAt] = useState<number | null>(null);
+  const [databaseRevision, setDatabaseRevision] = useState<string | null>(null);
+  const saveInFlightRef = useRef(false);
+  const completionInFlightRef = useRef(false);
 
   // 加载题目
   useEffect(() => {
+    let cancelled = false;
     const loadQuestions = async () => {
       setLoading(true);
+      setLoadError(null);
       try {
-        // 尝试从数据库加载题目
-        if (storyId) {
-          const story = await db.stories.get(storyId);
-          if (story?.quiz && story.quiz.length > 0) {
-            setQuestions(story.quiz);
-          } else {
-            // 使用示例题目
-            setQuestions(sampleQuestions);
-          }
-        } else {
-          setQuestions(sampleQuestions);
+        if (!storyId) {
+          setLoadError('没有找到这篇故事，暂时不能开始练习。');
+          return;
         }
+        if (!currentUserId) {
+          setLoadError('请先创建学习档案，再开始练习。');
+          return;
+        }
+        const access = await getLessonAccess(currentUserId, storyId);
+        if (!access.allowed || !access.story) {
+          setLoadError(
+            access.reason === 'locked'
+              ? '这篇故事还没有解锁。请从地图上的下一关开始。'
+              : '这篇故事暂时不可用。'
+          );
+          return;
+        }
+        const story = access.story;
+        if (!story.quiz?.length) {
+          setLoadError('这篇故事的练习正在准备中。');
+          return;
+        }
+        let draft: LoadedQuizDraft | null = null;
+        const revision = await getLearningRevision();
+        try {
+          draft = await loadQuizDraft(currentUserId, storyId, story.quiz);
+        } catch (error) {
+          // Draft storage is optional. A quota or IndexedDB failure must not
+          // block a child from starting a new quiz.
+          console.error('Failed to load quiz draft:', error);
+        }
+        if (cancelled) return;
+        setQuestions(story.quiz);
+        setInitialDraft(draft);
+        setAttemptStartedAt(draft?.startedAt ?? Date.now());
+        setDatabaseRevision(revision);
+        setIsReview(access.isReview);
+        setStoryRewardMagicPower(story.rewards.magicPower);
       } catch (error) {
         console.error('Failed to load questions:', error);
-        setQuestions(sampleQuestions);
+        setLoadError('练习加载失败，请重试。');
       } finally {
         setLoading(false);
       }
     };
 
-    loadQuestions();
-  }, [storyId]);
+    void loadQuestions();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId, storyId]);
 
-  // 完成 Quiz
-  const handleComplete = useCallback(async (result: QuizResultData) => {
-    try {
-      // 保存结果到数据库
-      if (currentUserId && storyId) {
-        await db.quizHistory.add({
-          id: crypto.randomUUID(),
+  const retryLoad = useCallback(() => {
+    window.location.reload();
+  }, []);
+
+  // 完成 Quiz：同一笔事务内保存记录、奖励和地图状态，失败时由结果页保留并重试。
+  const handleComplete = useCallback(
+    async (result: QuizResultData) => {
+      if (saveInFlightRef.current) return;
+      saveInFlightRef.current = true;
+      completionInFlightRef.current = true;
+      try {
+        if (!currentUserId || !storyId || databaseRevision === null) {
+          throw new Error('Missing learning profile');
+        }
+        await completeStoryQuiz({
           userId: currentUserId,
           storyId,
-          quizType: 'story_quiz',
-          questions: result.answers.map(a => ({
-            questionId: a.questionId,
-            userAnswer: a.userAnswer,
-            correctAnswer: '',
-            isCorrect: a.isCorrect,
-            timeSpent: 0,
-          })),
-          score: result.score,
-          earnedMagicPower: result.earnedMagicPower,
-          completedAt: Date.now(),
+          answers: result.answers.map(({ questionId, userAnswer }) => ({ questionId, userAnswer })),
+          hintsUsed: result.hintsUsed,
+          databaseRevision,
         });
-
-        // 更新用户进度
-        const progress = await db.userProgress.get(currentUserId);
-        if (progress) {
-          await db.userProgress.update(currentUserId, {
-            magicPower: progress.magicPower + result.earnedMagicPower,
-          });
-        }
+        navigate('/map');
+      } catch (error) {
+        console.error('Failed to save quiz result:', error);
+        completionInFlightRef.current = false;
+        throw error;
+      } finally {
+        saveInFlightRef.current = false;
       }
+    },
+    [currentUserId, databaseRevision, storyId, navigate]
+  );
 
-      // 如果通过，解锁下一个节点（全局状态，不需要 userId）
-      if (result.score >= 60 && storyId) {
-        // 标记当前故事为完成
-        const currentNode = await db.mapNodes.where('storyId').equals(storyId).first();
-        if (currentNode) {
-          await db.mapNodes.update(currentNode.id, { completed: true });
-          
-          // 解锁下一个节点
-          const nextNode = await db.mapNodes
-            .filter(n => n.prerequisites?.includes(currentNode.id) && !n.unlocked)
-            .first();
-          if (nextNode) {
-            await db.mapNodes.update(nextNode.id, { unlocked: true });
-          }
-        }
-      }
-
-      // 返回地图
-      navigate('/map');
-    } catch (error) {
-      console.error('Failed to save quiz result:', error);
-      navigate('/map');
-    }
-  }, [currentUserId, storyId, navigate]);
+  const handleDraftChange = useCallback(
+    async (snapshot: QuizDraftSnapshot) => {
+      if (
+        !currentUserId ||
+        !storyId ||
+        !attemptStartedAt ||
+        databaseRevision === null ||
+        completionInFlightRef.current
+      )
+        return;
+      await saveQuizDraft(
+        currentUserId,
+        storyId,
+        questions,
+        snapshot,
+        attemptStartedAt,
+        databaseRevision
+      );
+    },
+    [attemptStartedAt, currentUserId, databaseRevision, questions, storyId]
+  );
 
   // 退出
-  const handleExit = useCallback(() => {
-    if (confirm('确定要退出吗？当前进度将不会保存。')) {
-      navigate('/map');
-    }
-  }, [navigate]);
+  const handleExit = useCallback(() => setExitConfirmationOpen(true), []);
 
   if (loading) {
     return (
@@ -171,14 +161,64 @@ const QuizPage: React.FC = () => {
     );
   }
 
+  if (loadError) {
+    return (
+      <main className={styles.statusPage} aria-live="polite">
+        <div className={styles.statusCard}>
+          <span aria-hidden="true" className={styles.statusIcon}>
+            📚
+          </span>
+          <h1>暂时不能开始练习</h1>
+          <p>{loadError}</p>
+          <div className={styles.statusActions}>
+            <button
+              className={styles.secondaryAction}
+              onClick={() => navigate(`/reader/${storyId}`)}
+            >
+              返回阅读
+            </button>
+            <button className={styles.primaryAction} onClick={retryLoad}>
+              重新加载
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <div className={styles.container}>
       <QuizContainer
         questions={questions}
         storyId={storyId || 'unknown'}
+        isReview={isReview}
+        storyRewardMagicPower={storyRewardMagicPower}
+        initialDraft={initialDraft}
+        attemptStartedAt={attemptStartedAt ?? undefined}
+        onDraftChange={handleDraftChange}
         onComplete={handleComplete}
         onExit={handleExit}
       />
+      <Modal
+        open={exitConfirmationOpen}
+        onClose={() => setExitConfirmationOpen(false)}
+        title="要退出练习吗？"
+        size="sm"
+      >
+        <p>这次未完成的答题会保留，下次可以从当前进度继续。已经读过的故事记录也会保留。</p>
+        <div className={styles.statusActions}>
+          <button
+            className={styles.secondaryAction}
+            autoFocus
+            onClick={() => setExitConfirmationOpen(false)}
+          >
+            继续练习
+          </button>
+          <button className={styles.dangerAction} onClick={() => navigate('/map')}>
+            退出练习
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 };

@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { dictionaryService } from '@/services/dictionaryService';
+import { courseSupplementDictionary } from '@/data/dictionary/course-supplement';
 import { seedTestDatabase, createTestDatabase } from '../mocks';
 
 describe('DictionaryService', () => {
@@ -184,6 +185,55 @@ describe('DictionaryService', () => {
     it('应该能处理带标点的单词', async () => {
       const result = await dictionaryService.lookup('apple.');
       expect(result?.word).toBe('apple');
+    });
+
+    it('还原常见不规则、双写和 -ves 词形', async () => {
+      await dictionaryService.addWords([
+        { word: 'run', phonetic: '/rʌn/', meaningCn: '跑', meaningEn: 'to move fast on foot', partOfSpeech: 'v.', examples: [], emoji: '🏃', level: 1, frequency: 1 },
+        { word: 'happy', phonetic: '/ˈhæpi/', meaningCn: '高兴的', meaningEn: 'feeling pleased', partOfSpeech: 'adj.', examples: [], emoji: '🙂', level: 1, frequency: 1 },
+        { word: 'live', phonetic: '/lɪv/', meaningCn: '居住', meaningEn: 'to have a home', partOfSpeech: 'v.', examples: [], emoji: '🏠', level: 1, frequency: 1 },
+        { word: 'child', phonetic: '/tʃaɪld/', meaningCn: '孩子', meaningEn: 'a young person', partOfSpeech: 'n.', examples: [], emoji: '🧒', level: 1, frequency: 1 },
+      ]);
+
+      await expect(dictionaryService.lookup('running')).resolves.toMatchObject({ word: 'run' });
+      await expect(dictionaryService.lookup('happiest')).resolves.toMatchObject({ word: 'happy' });
+      await expect(dictionaryService.lookup('lives')).resolves.toMatchObject({ word: 'live' });
+      await expect(dictionaryService.lookup('children')).resolves.toMatchObject({ word: 'child' });
+    });
+
+    it('保留缩写和内部撇号，并移除外围标点', async () => {
+      await dictionaryService.addWords([
+        { word: "don't", phonetic: '/doʊnt/', meaningCn: '不要', meaningEn: 'do not', partOfSpeech: 'contraction', examples: [], emoji: '🚫', level: 1, frequency: 1 },
+        { word: 'guardian', phonetic: '/ˈɡɑːrdiən/', meaningCn: '守护者', meaningEn: 'a protector', partOfSpeech: 'n.', examples: [], emoji: '🛡️', level: 1, frequency: 1 },
+        { word: 'dr', phonetic: '/ˈdɒktər/', meaningCn: '医生', meaningEn: 'doctor abbreviation', partOfSpeech: 'abbr.', examples: [], emoji: '🩺', level: 1, frequency: 1 },
+      ]);
+
+      await expect(dictionaryService.lookup("“don't!”")).resolves.toMatchObject({ word: "don't" });
+      await expect(dictionaryService.lookup('Guardian’s')).resolves.toMatchObject({ word: 'guardian' });
+      await expect(dictionaryService.lookup('Dr.')).resolves.toMatchObject({ word: 'dr' });
+    });
+  });
+
+  describe('课程补充词典', () => {
+    it('为常见漏词、故事专名和拼写练习提供可读释义', async () => {
+      await dictionaryService.addWords(courseSupplementDictionary);
+      expect(courseSupplementDictionary).toHaveLength(356);
+      expect(courseSupplementDictionary.every(entry => entry.phonetic.length > 0)).toBe(true);
+
+      const checks = [
+        ['just', '只是；刚刚；正好'],
+        ['also', '也；还'],
+        ['much', '许多；很'],
+        ['Zephyr', '西风；泽菲尔（故事中的风精灵/龙）'],
+        ['B-A-L-L', 'B-A-L-L（ball的拼写）'],
+      ] as const;
+
+      for (const [word, meaningCn] of checks) {
+        const result = await dictionaryService.lookup(word);
+        expect(result, word).toMatchObject({ word: word.toLowerCase(), meaningCn });
+        expect(result?.meaningEn, word).not.toHaveLength(0);
+        expect(result?.examples, word).not.toHaveLength(0);
+      }
     });
   });
 });

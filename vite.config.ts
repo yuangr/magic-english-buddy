@@ -1,11 +1,9 @@
 import path from 'path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, '.', '');
-  
+export default defineConfig(() => {
   return {
     base: '/magic-english-buddy/',
     server: {
@@ -19,6 +17,7 @@ export default defineConfig(({ mode }) => {
         includeAssets: [
           'favicon.ico',
           'robots.txt',
+          'licenses/*.txt',
           'apple-touch-icon.png',
           'animations/*.json',
           'sounds/*.mp3',
@@ -29,9 +28,9 @@ export default defineConfig(({ mode }) => {
           short_name: 'MagicBuddy',
           description: '你的魔法英语伙伴 - 离线英语学习应用',
           theme_color: '#6B5CE7',
-          background_color: '#1A1A2E',
+          background_color: '#f8f7f4',
           display: 'standalone',
-          orientation: 'portrait',
+          orientation: 'any',
           start_url: '/magic-english-buddy/',
           scope: '/magic-english-buddy/',
           icons: [
@@ -56,8 +55,11 @@ export default defineConfig(({ mode }) => {
           lang: 'zh-CN'
         },
         workbox: {
+          // Course recordings are an optional download managed by the settings page.
+          // Never fetch them just because the app is installed or updated.
+          globIgnores: ['**/audio/**'],
           globPatterns: [
-            '**/*.{js,css,html,ico,png,svg,webp,json,woff,woff2}'
+            '**/*.{js,css,html,ico,png,svg,webp,json,woff,woff2,mp3}'
           ],
           runtimeCaching: [
             {
@@ -69,21 +71,6 @@ export default defineConfig(({ mode }) => {
                 expiration: {
                   maxEntries: 100,
                   maxAgeSeconds: 60 * 60 * 24 * 30 // 30 天
-                }
-              }
-            },
-            {
-              // 音频文件 - 缓存优先
-              urlPattern: /\/audio\/.+\.(mp3|ogg|wav)$/,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'audio-cache',
-                expiration: {
-                  maxEntries: 100,
-                  maxAgeSeconds: 60 * 60 * 24 * 30
-                },
-                cacheableResponse: {
-                  statuses: [0, 200]
                 }
               }
             },
@@ -113,14 +100,10 @@ export default defineConfig(({ mode }) => {
           ]
         },
         devOptions: {
-          enabled: true
+          enabled: false
         }
       })
     ],
-    define: {
-      'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
