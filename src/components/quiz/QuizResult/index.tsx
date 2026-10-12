@@ -13,12 +13,20 @@ interface QuizResultProps {
   result: QuizResultData;
   onFinish: () => void;
   onRetry: () => void;
+  isSaving?: boolean;
+  saveError?: string | null;
+  isReview?: boolean;
+  storyRewardMagicPower?: number;
 }
 
 export const QuizResult: React.FC<QuizResultProps> = ({
   result,
   onFinish,
   onRetry,
+  isSaving = false,
+  saveError,
+  isReview = false,
+  storyRewardMagicPower = 0,
 }) => {
   const isPassed = result.score >= 60;
 
@@ -120,7 +128,13 @@ export const QuizResult: React.FC<QuizResultProps> = ({
       >
         <span className={styles.rewardIcon}>✨</span>
         <span className={styles.rewardText}>
-          获得 <strong>{result.earnedMagicPower}</strong> 魔力值
+          {isReview ? (
+            '复习结果保存后，本次不会重复发放奖励'
+          ) : isPassed ? (
+            <>保存本次通关后可获得 <strong>{result.earnedMagicPower + storyRewardMagicPower}</strong> 魔力值</>
+          ) : (
+            <>及格并保存后可获得 <strong>{result.earnedMagicPower + storyRewardMagicPower}</strong> 魔力值</>
+          )}
         </span>
       </motion.div>
 
@@ -132,17 +146,21 @@ export const QuizResult: React.FC<QuizResultProps> = ({
         transition={{ delay: 0.8 }}
       >
         {!isPassed && (
-          <Button variant="secondary" onClick={onRetry}>
+          <Button variant="secondary" onClick={onRetry} disabled={isSaving}>
             🔄 再试一次
           </Button>
         )}
-        <Button variant="primary" onClick={onFinish}>
-          {isPassed ? '🎯 完成' : '📖 返回学习'}
+        <Button variant="primary" onClick={onFinish} disabled={isSaving}>
+          {isSaving ? '正在保存…' : isPassed ? '🎯 完成' : '📖 返回学习'}
         </Button>
       </motion.div>
+      {saveError && (
+        <p className={styles.saveError} role="alert">
+          {saveError}
+        </p>
+      )}
     </div>
   );
 };
 
 export default QuizResult;
-

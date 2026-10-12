@@ -4,7 +4,7 @@
  * 类似多邻国的设计：从底部起点向上延伸
  */
 
-import type { MapNode, MapRegion } from '@/db';
+import type { MapNode, MapRegion, Story } from '@/db';
 import { levelDataMap } from './index';
 import type { LevelNumber } from './index';
 
@@ -54,7 +54,10 @@ export const NODE_ITEM_HEIGHT = 120;
 export const LEVEL_DIVIDER_HEIGHT = 80;
 
 /** 节点类型样式映射 */
-export const nodeTypeStyles: Record<string, { color: string; icon: string; size: 'sm' | 'md' | 'lg' }> = {
+export const nodeTypeStyles: Record<
+  string,
+  { color: string; icon: string; size: 'sm' | 'md' | 'lg' }
+> = {
   story: { color: '#6B5CE7', icon: '📖', size: 'md' },
   boss: { color: '#F59E0B', icon: '👑', size: 'lg' },
   challenge: { color: '#EF4444', icon: '⚡', size: 'md' },
@@ -64,14 +67,114 @@ export const nodeTypeStyles: Record<string, { color: string; icon: string; size:
 };
 
 /** 级别主题颜色 */
-export const levelThemeColors: Record<LevelNumber, { primary: string; secondary: string; bg: string }> = {
-  1: { primary: '#22C55E', secondary: '#86EFAC', bg: '#052E16' },  // 森林绿
-  2: { primary: '#8B5CF6', secondary: '#C4B5FD', bg: '#1E1B4B' },  // 山谷紫
-  3: { primary: '#06B6D4', secondary: '#67E8F9', bg: '#042F2E' },  // 海洋蓝
-  4: { primary: '#F472B6', secondary: '#FBCFE8', bg: '#4C1D95' },  // 云彩粉
-  5: { primary: '#FBBF24', secondary: '#FDE68A', bg: '#1C1917' },  // 星空金
-  6: { primary: '#A78BFA', secondary: '#DDD6FE', bg: '#1E1B4B' },  // 时光紫
-  7: { primary: '#F43F5E', secondary: '#FDA4AF', bg: '#1C1917' },  // 核心红
+export const levelThemeColors: Record<
+  LevelNumber,
+  { primary: string; secondary: string; bg: string }
+> = {
+  1: { primary: '#22C55E', secondary: '#86EFAC', bg: '#052E16' }, // 森林绿
+  2: { primary: '#8B5CF6', secondary: '#C4B5FD', bg: '#1E1B4B' }, // 山谷紫
+  3: { primary: '#06B6D4', secondary: '#67E8F9', bg: '#042F2E' }, // 海洋蓝
+  4: { primary: '#F472B6', secondary: '#FBCFE8', bg: '#4C1D95' }, // 云彩粉
+  5: { primary: '#FBBF24', secondary: '#FDE68A', bg: '#1C1917' }, // 星空金
+  6: { primary: '#A78BFA', secondary: '#DDD6FE', bg: '#1E1B4B' }, // 时光紫
+  7: { primary: '#F43F5E', secondary: '#FDA4AF', bg: '#1C1917' }, // 核心红
+};
+
+/**
+ * A few of the original level maps were authored before their final stories
+ * existed. Keep every authored node ID intact and give the added lessons
+ * stable, collision-free IDs instead of reusing an old placeholder (notably
+ * `node_l2_boss`, which has historically pointed at `l2_010`).
+ */
+const supplementalNodeId = (storyId: string): string => `node_course_${storyId}`;
+
+const isNumberedStory = (storyId: string): boolean => /_\d{3}$/.test(storyId);
+
+const nodeTypeForStory = (story: Story, source?: MapNode): MapNode['type'] => {
+  if (story.nodeType) return story.nodeType;
+  // Some legacy source maps styled their last numbered story as a boss. The
+  // story catalogue is the source of truth for that lesson's type.
+  if (isNumberedStory(story.id)) return 'story';
+  return source?.type ?? 'story';
+};
+
+const nodeFromStory = (
+  story: Story,
+  source: MapNode | undefined,
+  previous: MapNode | undefined
+): MapNode => {
+  const type = nodeTypeForStory(story, source);
+  const sourceMatchesType = source?.type === type;
+  const fallbackPosition = previous
+    ? { x: previous.position.x, y: previous.position.y + 120 }
+    : { x: 200, y: 80 };
+
+  return {
+    id: source?.id ?? supplementalNodeId(story.id),
+    regionId: story.regionId,
+    type,
+    storyId: story.id,
+    position: source?.position ?? fallbackPosition,
+    prerequisites: [],
+    // Preserve authored rewards for unchanged nodes. Correct a legacy source
+    // node only when its type was changed to match its bundled story.
+    rewards: sourceMatchesType ? source.rewards : story.rewards,
+    unlocked: source?.unlocked ?? false,
+    completed: source?.completed ?? false,
+    title: sourceMatchesType ? source.title : story.title,
+    titleCn: sourceMatchesType ? source.titleCn : story.titleCn,
+    emoji: sourceMatchesType ? source.emoji : undefined,
+  };
+};
+
+/**
+ * Keep the authored map ordering (including its bonus and challenge slots),
+ * then insert stories added after those maps were designed before the next
+ * numbered story or the boss. This produces one topologically ordered route
+ * for every bundled story without making old placeholder nodes playable.
+ */
+const orderLevelNodes = (sourceNodes: MapNode[], stories: Story[]): MapNode[] => {
+  const storyById = new Map(stories.map(story => [story.id, story]));
+  const representedStoryIds = new Set<string>();
+  const nodes: MapNode[] = [];
+
+  for (const source of sourceNodes) {
+    const story = source.storyId ? storyById.get(source.storyId) : undefined;
+    if (!story || representedStoryIds.has(story.id)) continue;
+    nodes.push(nodeFromStory(story, source, nodes[nodes.length - 1]));
+    representedStoryIds.add(story.id);
+  }
+
+  for (const story of stories) {
+    if (representedStoryIds.has(story.id)) continue;
+    const node = nodeFromStory(story, undefined, nodes[nodes.length - 1]);
+    const nextNumberedStory = isNumberedStory(story.id)
+      ? nodes.findIndex(candidate => {
+          const candidateId = candidate.storyId;
+          return (
+            !!candidateId &&
+            isNumberedStory(candidateId) &&
+            candidateId.localeCompare(story.id) > 0
+          );
+        })
+      : -1;
+    const bossIndex = nodes.findIndex(candidate => candidate.type === 'boss');
+    const insertionIndex =
+      nextNumberedStory >= 0
+        ? nextNumberedStory
+        : bossIndex >= 0
+          ? bossIndex
+          : nodes.length;
+    nodes.splice(insertionIndex, 0, node);
+    representedStoryIds.add(story.id);
+  }
+
+  return nodes.map((node, index) => ({
+    ...node,
+    // The map is intentionally a single ordered route. This also replaces
+    // prerequisites that formerly pointed at invisible treasure/branch slots.
+    prerequisites: index === 0 ? [] : [nodes[index - 1]!.id],
+  }));
 };
 
 // ============ 生成函数 ============
@@ -90,18 +193,17 @@ export const generateUnifiedMapData = (): UnifiedMapData => {
     const levelNum = level as LevelNumber;
     const levelData = levelDataMap[levelNum];
     const region = levelData.regionConfig;
-    const nodes = levelData.getMapNodes();
-    
+    const nodes = orderLevelNodes(levelData.getMapNodes(), levelData.stories);
+
     // 记录级别起始索引
     const startIndex = globalIndex;
-    
-    // 按 ID 排序确保顺序正确
-    nodes.sort((a, b) => a.id.localeCompare(b.id));
-    
+
     // 转换为统一节点
     nodes.forEach((node, levelIndex) => {
       const unifiedNode: UnifiedMapNode = {
         ...node,
+        prerequisites:
+          level > 1 && levelIndex === 0 ? [allNodes[allNodes.length - 1]!.id] : node.prerequisites,
         level: levelNum,
         globalIndex,
         levelIndex,
@@ -109,14 +211,14 @@ export const generateUnifiedMapData = (): UnifiedMapData => {
         isLevelStart: levelIndex === 0,
         isLevelEnd: levelIndex === nodes.length - 1,
         // 只有第一个级别的第一个节点默认解锁
-        unlocked: level === 1 && levelIndex === 0 ? true : node.unlocked ?? false,
+        unlocked: level === 1 && levelIndex === 0 ? true : (node.unlocked ?? false),
         completed: node.completed ?? false,
       };
-      
+
       allNodes.push(unifiedNode);
       globalIndex++;
     });
-    
+
     // 记录级别区段信息
     sections.push({
       level: levelNum,
@@ -126,7 +228,7 @@ export const generateUnifiedMapData = (): UnifiedMapData => {
       nodeCount: nodes.length,
     });
   }
-  
+
   return {
     nodes: allNodes,
     sections,
@@ -143,12 +245,14 @@ export const mergeNodeStates = (
   dbNodes: MapNode[]
 ): UnifiedMapNode[] => {
   const dbNodeMap = new Map(dbNodes.map(n => [n.id, n]));
-  
+
   return unifiedNodes.map(node => {
-    const dbNode = dbNodeMap.get(node.id);
+    const dbNode = dbNodeMap.get(node.id) ?? dbNodes.find(saved => saved.storyId === node.storyId);
     if (dbNode) {
       return {
         ...node,
+        id: dbNode.id,
+        prerequisites: dbNode.prerequisites,
         unlocked: dbNode.unlocked ?? node.unlocked,
         completed: dbNode.completed ?? node.completed,
       };
@@ -164,13 +268,13 @@ export const findActiveNode = (nodes: UnifiedMapNode[]): UnifiedMapNode | null =
   // 找第一个解锁但未完成的节点
   const activeNode = nodes.find(n => n.unlocked && !n.completed);
   if (activeNode) return activeNode;
-  
+
   // 如果全部完成，返回最后一个已完成的
   const completedNodes = nodes.filter(n => n.completed);
   if (completedNodes.length > 0) {
     return completedNodes[completedNodes.length - 1] ?? null;
   }
-  
+
   // 否则返回第一个节点
   return nodes[0] ?? null;
 };
@@ -186,7 +290,7 @@ export const calculateNodePosition = (
 ): number => {
   // 地图从下往上，所以需要反转计算
   const reversedIndex = totalNodes - 1 - nodeIndex;
-  
+
   // 计算经过的级别分隔数
   let dividerCount = 0;
   for (const section of sections) {
@@ -194,7 +298,7 @@ export const calculateNodePosition = (
       dividerCount++;
     }
   }
-  
+
   return reversedIndex * NODE_ITEM_HEIGHT + dividerCount * LEVEL_DIVIDER_HEIGHT;
 };
 
@@ -204,7 +308,7 @@ export const calculateNodePosition = (
 export const getNodeVisualConfig = (node: UnifiedMapNode) => {
   const typeStyle = nodeTypeStyles[node.type] || nodeTypeStyles.story;
   const themeColor = levelThemeColors[node.level];
-  
+
   return {
     ...typeStyle,
     themeColor,
@@ -230,7 +334,7 @@ export const getLevelProgress = (nodes: UnifiedMapNode[], level: LevelNumber) =>
   const levelNodes = getNodesByLevel(nodes, level);
   const completed = levelNodes.filter(n => n.completed).length;
   const total = levelNodes.length;
-  
+
   return {
     completed,
     total,
@@ -244,7 +348,7 @@ export const getLevelProgress = (nodes: UnifiedMapNode[], level: LevelNumber) =>
 export const getTotalProgress = (nodes: UnifiedMapNode[]) => {
   const completed = nodes.filter(n => n.completed).length;
   const total = nodes.length;
-  
+
   return {
     completed,
     total,
@@ -266,4 +370,3 @@ export default {
   nodeTypeStyles,
   levelThemeColors,
 };
-

@@ -4,8 +4,12 @@
  */
 
 import { db, type ReadingRecord, type Story, type ShadowingRecord, generateId } from '@/db';
+import { assertLearningRevision, getLearningRevision } from './learningRevisionService';
+import { completeUserStoryMapNodeInTransaction } from './mapProgressService';
+import { getEffectiveStreak, recordLearningActivityInTransaction } from './learningActivityService';
 
 interface ReadingSession {
+  databaseRevision: Promise<string | null>;
   storyId: string;
   startTime: number;
   currentParagraph: number;
@@ -16,12 +20,14 @@ interface ReadingSession {
 
 class ReadingProgressService {
   private currentSession: ReadingSession | null = null;
+  private endingSessionPromise: Promise<ReadingRecord | null> | null = null;
 
   /**
    * 开始阅读会话
    */
   startSession(storyId: string, totalParagraphs: number = 1): void {
     this.currentSession = {
+      databaseRevision: getLearningRevision().catch(() => null),
       storyId,
       startTime: Date.now(),
       currentParagraph: 0,
@@ -65,30 +71,77 @@ class ReadingProgressService {
    * 结束阅读会话并保存
    */
   async endSession(userId: string, completed: boolean = true): Promise<ReadingRecord | null> {
+    if (this.endingSessionPromise) {
+      return this.endingSessionPromise;
+    }
     if (!this.currentSession) return null;
 
+    const session = this.currentSession;
     const endTime = Date.now();
-    const duration = Math.floor((endTime - this.currentSession.startTime) / 1000);
-    const progress = completed 
-      ? 100 
-      : Math.round((this.currentSession.currentParagraph / this.currentSession.totalParagraphs) * 100);
-    
+    const duration = Math.floor((endTime - session.startTime) / 1000);
+    const progress = completed
+      ? 100
+      : Math.round((session.currentParagraph / session.totalParagraphs) * 100);
+
     const record: ReadingRecord = {
       id: generateId(),
       userId,
-      storyId: this.currentSession.storyId,
-      startTime: this.currentSession.startTime,
+      storyId: session.storyId,
+      startTime: session.startTime,
       endTime,
       duration,
       progress,
-      wordsLookedUp: this.currentSession.wordsLookedUp,
-      shadowingRecords: this.currentSession.shadowingRecords,
+      wordsLookedUp: session.wordsLookedUp,
+      shadowingRecords: session.shadowingRecords,
       completed,
     };
 
+    const savePromise = this.saveSession(userId, record, session);
+    this.endingSessionPromise = savePromise;
     try {
-      await db.readingHistory.add(record);
-      this.currentSession = null;
+      return await savePromise;
+    } finally {
+      if (this.endingSessionPromise === savePromise) {
+        this.endingSessionPromise = null;
+      }
+    }
+  }
+
+  private async saveSession(
+    userId: string,
+    record: ReadingRecord,
+    session: ReadingSession
+  ): Promise<ReadingRecord | null> {
+    try {
+      const revision = await session.databaseRevision;
+      if (revision === null) throw new Error('Learning records unavailable');
+      await db.transaction('rw', db.readingHistory, db.userProgress, db.learningMeta, async () => {
+        await assertLearningRevision(revision);
+        await db.readingHistory.add(record);
+
+        const userProgress = await db.userProgress.get(userId);
+        if (!userProgress) {
+          throw new Error('Cannot save reading progress without a user progress record');
+        }
+
+        const records = await db.readingHistory.where('userId').equals(userId).toArray();
+        const completedStoryIds = new Set(
+          records.filter(item => item.completed).map(item => item.storyId)
+        );
+        const totalReadingTime = Math.floor(
+          records.reduce((total, item) => total + item.duration, 0) / 60
+        );
+        const updates: Partial<typeof userProgress> = {
+          totalStoriesRead: completedStoryIds.size,
+          totalReadingTime,
+        };
+        await db.userProgress.update(userId, updates);
+        if (record.completed) await recordLearningActivityInTransaction(userId);
+      });
+
+      if (this.currentSession === session) {
+        this.currentSession = null;
+      }
       return record;
     } catch (error) {
       console.error('Failed to save reading history:', error);
@@ -100,23 +153,14 @@ class ReadingProgressService {
    * 获取故事的阅读历史
    */
   async getStoryHistory(storyId: string): Promise<ReadingRecord[]> {
-    return db.readingHistory
-      .where('storyId')
-      .equals(storyId)
-      .reverse()
-      .toArray();
+    return db.readingHistory.where('storyId').equals(storyId).reverse().toArray();
   }
 
   /**
    * 获取用户的所有阅读历史
    */
   async getUserHistory(userId: string, limit = 50): Promise<ReadingRecord[]> {
-    return db.readingHistory
-      .where('userId')
-      .equals(userId)
-      .reverse()
-      .limit(limit)
-      .toArray();
+    return db.readingHistory.where('userId').equals(userId).reverse().limit(limit).toArray();
   }
 
   /**
@@ -130,7 +174,7 @@ class ReadingProgressService {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayStartTime = todayStart.getTime();
-    
+
     const todayRecords = await db.readingHistory
       .where('userId')
       .equals(userId)
@@ -157,41 +201,20 @@ class ReadingProgressService {
     totalWordsLookedUp: number;
     streakDays: number;
   }> {
-    const allRecords = await db.readingHistory
-      .where('userId')
-      .equals(userId)
-      .toArray();
+    const [allRecords, progress] = await Promise.all([
+      db.readingHistory.where('userId').equals(userId).toArray(),
+      db.userProgress.get(userId),
+    ]);
 
     const uniqueStories = new Set(allRecords.map(r => r.storyId));
     const totalDuration = allRecords.reduce((sum, r) => sum + r.duration, 0);
     const uniqueWords = new Set(allRecords.flatMap(r => r.wordsLookedUp));
 
-    // 计算连续学习天数
-    const dates = [...new Set(allRecords.map(r => {
-      const date = new Date(r.startTime);
-      return date.toISOString().split('T')[0];
-    }))].sort().reverse();
-
-    let streakDays = 0;
-    const today = new Date();
-    
-    for (let i = 0; i < dates.length; i++) {
-      const expectedDate = new Date(today);
-      expectedDate.setDate(today.getDate() - i);
-      const expectedDateStr = expectedDate.toISOString().split('T')[0];
-      
-      if (dates.includes(expectedDateStr)) {
-        streakDays++;
-      } else {
-        break;
-      }
-    }
-
     return {
       totalStories: uniqueStories.size,
       totalDuration,
       totalWordsLookedUp: uniqueWords.size,
-      streakDays,
+      streakDays: progress ? getEffectiveStreak(progress) : 0,
     };
   }
 
@@ -204,59 +227,30 @@ class ReadingProgressService {
       .equals(userId)
       .filter(r => r.storyId === storyId && r.completed)
       .count();
-    
+
     return records > 0;
   }
 
   /**
    * 标记故事为已完成（更新地图节点状态）
    */
-  async markStoryCompleted(storyId: string): Promise<void> {
-    try {
-      // 查找对应的地图节点并标记为完成
-      const node = await db.mapNodes
-        .where('storyId')
-        .equals(storyId)
-        .first();
-      
-      if (node) {
-        await db.mapNodes.update(node.id, { 
-          completed: true,
-        });
-        
-        // 解锁后续节点：查找所有将当前节点作为前置条件的节点
-        const dependentNodes = await db.mapNodes
-          .filter(n => n.prerequisites?.includes(node.id))
-          .toArray();
-        
-        for (const nextNode of dependentNodes) {
-          // 检查该节点的所有前置条件是否都已完成
-          const allPrereqsCompleted = await this.checkAllPrerequisitesCompleted(nextNode.prerequisites);
-          if (allPrereqsCompleted) {
-            await db.mapNodes.update(nextNode.id, { unlocked: true });
-          }
-        }
+  async markStoryCompleted(userId: string, storyId: string): Promise<void> {
+    await db.transaction(
+      'rw',
+      [db.users, db.userProgress, db.quizHistory, db.mapNodes, db.learningMeta],
+      async () => {
+        await this.markStoryCompletedInTransaction(userId, storyId);
       }
-    } catch (error) {
-      console.error('Failed to mark story as completed:', error);
-    }
+    );
   }
 
   /**
-   * 检查所有前置条件是否已完成
+   * Marks a node and its newly available dependents while an enclosing Dexie
+   * transaction is active. Completion settlement uses this so map state cannot
+   * be committed without the accompanying rewards and quiz history.
    */
-  private async checkAllPrerequisitesCompleted(prerequisites: string[]): Promise<boolean> {
-    if (!prerequisites || prerequisites.length === 0) {
-      return true;
-    }
-    
-    for (const prereqId of prerequisites) {
-      const prereqNode = await db.mapNodes.get(prereqId);
-      if (!prereqNode || !prereqNode.completed) {
-        return false;
-      }
-    }
-    return true;
+  async markStoryCompletedInTransaction(userId: string, storyId: string): Promise<string[]> {
+    return (await completeUserStoryMapNodeInTransaction(userId, storyId)).newlyUnlockedNodeIds;
   }
 
   /**
@@ -270,11 +264,8 @@ class ReadingProgressService {
    * 获取下一个未完成的故事
    */
   async getNextUncompletedStory(level: number): Promise<Story | null> {
-    const story = await db.stories
-      .where('level')
-      .equals(level)
-      .first();
-    
+    const story = await db.stories.where('level').equals(level).first();
+
     return story || null;
   }
 
